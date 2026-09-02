@@ -18,11 +18,24 @@ arrives as several focus notifications, and every one of them asked for a window
 own. Two of the three were then too narrow for Safari's minimum and got floated, so they
 appeared as blank floating windows over the tiling.
 
-Two guards added. Only one request per app may be in flight, and not another for five
-seconds. And a request is only made when a person has touched the keyboard or trackpad
-in the last two seconds: an app activating itself — because another program asked it to
-open a URL, which it may answer in a tab somewhere else entirely — is not somebody asking
-for a window here. That is the case that produced blank windows with no explanation.
+Only one request per app may be in flight, and not another for five seconds. That alone
+turns three windows into at most one.
+
+Requiring a recent keyboard or trackpad touch was tried and taken straight back out. It
+would have worked for a person at the machine and broken the case this project is for:
+Wisper delegates a task, the user walks away, and the assistant activates an app when the
+work is done. A window manager that only cooperates while somebody is touching it is the
+wrong shape. Whether to add a window is a question about the *app's* behaviour, not about
+who asked — an activation from a person, from Wisper, or from any other program deserves
+the same answer.
+
+So hyprmac looks at what the app does with the 0.7 s it is given: a new window of its
+own, or a **title change on a window it already had**, both mean the activation carried a
+request that has now been answered — in a tab, possibly on another workspace — and no
+window is added. The known cost is an app whose titles change on their own, a terminal
+running a build being the obvious one: click its icon while a title happens to change and
+you get no window, and have to ask again. A missed window is recoverable and explicable;
+a blank one appearing beside a page you cannot see is neither.
 
 Still open: a URL opened *by hand* into a tab of a window on another workspace. hyprmac
 cannot see tabs, so it cannot move the page to where you are, and it cannot tell that

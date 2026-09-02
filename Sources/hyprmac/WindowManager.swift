@@ -710,29 +710,36 @@ final class WindowManager: SurfaceRegistryDelegate {
                     // One request per app at a time, and not again for five seconds.
                     guard !askingForWindow.contains(bundle),
                           CACurrentMediaTime() - (lastAskedForWindow[bundle] ?? 0) > 5 else { return }
-                    // And only when a person just did something. An app activating
-                    // itself — because another program asked it to open a URL, which it
-                    // may well answer in a tab of a window on another workspace — is not
-                    // a request for a window here, and answering it with one produces a
-                    // blank window nobody asked for and cannot explain.
-                    let recent = lastInput.map { CACurrentMediaTime() - $0.at < 2.0 } ?? false
-                    guard recent else {
-                        log("focus: \(bundle) activated with nothing here, but no one touched the keyboard or trackpad — not asking for a window")
-                        return
-                    }
                     askingForWindow.insert(bundle)
                     // Give the app a moment to answer for itself first. "Activate
                     // Safari" and "open this URL in Safari" arrive here identically,
                     // and in the second case Safari is already making a window — or
                     // has put the page in a tab. Asking immediately produced a blank
                     // window beside a page the user could not see.
-                    let before = registry.allSurfaces.filter { $0.bundleID == bundle }.count
+                    // What the app already has, and what each window is showing. Whether
+                    // to add a window is a question about the app's behaviour, not about
+                    // who asked: an activation from a person, from Wisper, or from any
+                    // other program all deserve the same answer, and hyprmac is expected
+                    // to work while nobody is at the machine.
+                    let before = registry.allSurfaces.filter { $0.bundleID == bundle }
+                    let beforeCount = before.count
+                    let beforeTitles = Dictionary(before.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                         guard let self else { return }
                         askingForWindow.remove(bundle)
                         lastAskedForWindow[bundle] = CACurrentMediaTime()
-                        if registry.allSurfaces.filter({ $0.bundleID == bundle }).count > before {
+                        let now = registry.allSurfaces.filter { $0.bundleID == bundle }
+                        if now.count > beforeCount {
                             log("focus: \(bundle) opened its own window — not asking for another")
+                            return
+                        }
+                        // A window it already had is showing something new: the
+                        // activation carried a request and the app has answered it, in a
+                        // tab, in a window that may be on another workspace entirely.
+                        // Adding a window here would put a blank one beside a page the
+                        // user cannot see, which is the thing to avoid above all.
+                        if let changed = now.first(where: { beforeTitles[$0.id] != nil && beforeTitles[$0.id] != $0.title }) {
+                            log("focus: \(bundle) answered in a window it already had (\(changed.id)) — not asking for another")
                             return
                         }
                         if workspaces[activeWorkspace]?.all.contains(where: { self.knownIdentity[$0]?.bundleID == bundle }) == true {
