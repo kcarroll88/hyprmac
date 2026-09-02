@@ -82,6 +82,10 @@ machine has one and falls back to a locally made identity otherwise, because mac
 the Accessibility grant to a signature and an unstable one costs you the grant on every
 rebuild.
 
+## Licence
+
+[MIT](LICENSE) — use it, change it, ship it, sell it. Keep the notice.
+
 ## More
 
 - [wisp-os.com](https://wisp-os.com) — the site, and [Wisper](https://wisp-os.com),
