@@ -8,6 +8,66 @@ Status: **open** unless marked otherwise.
 
 ---
 
+## 6. A window sometimes changes workspace when switching quickly
+
+**Build:** 20260902-1312 · **Reported:** 2 Sep
+
+**What happens.** Switching workspaces in quick succession occasionally leaves a window
+on a different workspace than the one it was on. Intermittent.
+
+**Not yet diagnosed, and it needs the journal to catch it.** hyprmac writes a line for
+every tree change with the cause that made it — `tree ws2: … -> … [dispatch
+moveToWorkspace(3)]`, `[added surface#…]`, `[drag swap …]`. When this happens next,
+note roughly when, and `~/Library/Logs/hyprmac.log` will name the mechanism rather
+than leaving us to guess between the candidates below.
+
+**Candidates, in the order I would check them.**
+
+1. **A window re-adopted mid-switch lands where you are.** Accessibility drops and
+   re-reports windows, and the three-second rescan re-adopts them. A new window is
+   placed on the *active* workspace by design; a re-adopted one is meant to be caught
+   by its closed-window record, which is keyed by exact id. If a window is re-reported
+   without ever having been seen to close, there is no record to catch it, and it will
+   be treated as new — landing wherever you happen to be standing at that moment. Rapid
+   switching widens that window of opportunity considerably.
+2. **The parked-focus follow, racing the switch.** `didFocus` ignores focus reports for
+   half a second after a switch (`lastSwitch`) precisely because switches generate
+   their own focus echoes. Switching faster than that guard is exactly what the guard
+   assumes cannot happen.
+3. **Frame writes crossing a switch.** Parking a window is a frame write, and a relayout
+   scheduled before a switch can land after it.
+
+---
+
+## 5. Discord reopens its window when you return to the workspace
+
+**Build:** 20260902-1312 · **Reported:** 2 Sep
+
+**What happens.** Close the Discord window. Discord keeps running with no window, which
+is expected on a Mac. Switch to another workspace and back to the one Discord was on,
+and the Discord window has opened itself again.
+
+**Cause — likely, and testable.** Returning to a workspace unhides the apps that belong
+to it (`WindowManager.swift`, the `hiddenApps.intersection(activeApps)` loop calling
+`NSRunningApplication.unhide()`), because hyprmac hides an app whole when it has nothing
+on the workspace you are looking at — that is what stops a parked window's sliver
+showing through. Electron apps routinely respond to being activated or unhidden with no
+open windows by creating one; that is the framework's default `activate` behaviour, and
+Discord is Electron. hyprmac then sees a genuinely new window and places it on the
+workspace you are standing on, which is the one it just came back to — so it looks like
+the window restored itself.
+
+**Worth checking first:** whether Discord is in `hiddenApps` at all once its last window
+is closed, since an app with no windows has nothing to park and might never be hidden.
+If it is not, the cause is elsewhere and the next suspect is the closed-window record
+placing a recreated window back on its old workspace.
+
+**The fix is about not waking apps that have nothing here.** An app with no windows on
+any workspace should not be unhidden by a workspace switch, and possibly should not have
+been hidden by one either.
+
+---
+
 ## 4. Dragging a floating window drags the tiled window underneath it too
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
