@@ -119,6 +119,11 @@ final class WindowManager: SurfaceRegistryDelegate {
         didSet { UserDefaults.standard.set(Array(floatedApps).sorted(), forKey: "floatedApps") }
     }
     private var fitCheckScheduled = false
+    /// Windows seen on the active workspace but absent from the screen. Acted on only
+    /// after two consecutive sightings, so a window caught mid-hide or mid-unhide is
+    /// not mistaken for one the app has put away.
+    private var missingFromScreen: Set<SurfaceID> = []
+    private var recheckScheduled = false
     /// How many times the hotkeys have been registered without every bind taking.
     private var bindAttempts = 0
     private var relayoutScheduled = false
@@ -274,7 +279,18 @@ final class WindowManager: SurfaceRegistryDelegate {
             // The window as it actually is, not its tile: a window a little off its
             // slot must still be grabbable by its title bar.
             for id in ws.tiled {
-                guard let f = registry.surface(for: id)?.frame, f.contains(p), p.y - f.minY < 34 else { continue }
+                guard let surface = registry.surface(for: id) else { continue }
+                let f = surface.frame
+                guard f.contains(p), p.y - f.minY < 34 else { continue }
+                // And confirm the system agrees that this window is what the pointer
+                // is on. Geometry alone said yes to a press on anything floating above
+                // a tiled window — a picture-in-picture window, a panel, a dialog —
+                // none of which hyprmac manages or can even see in its own registry,
+                // so dragging one dragged the tiled window underneath it as well.
+                // A nil answer means the window server had nothing to say; trust the
+                // geometry then rather than refusing to drag at all.
+                if let onTop = Accessibility.windowUnderPointer(p),
+                   let ax = surface as? AXSurface, onTop != ax.windowID { continue }
                 return (id, f)
             }
             return nil
@@ -351,6 +367,7 @@ final class WindowManager: SurfaceRegistryDelegate {
         // AX notifications are best-effort; a slow sweep catches whatever they miss.
         Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             self?.registry.rescan()
+            self?.dropWindowsTheirAppsHid()
         }
         // After the first sweep every window that exists has been found. A record
         // left over for an app that has kept running is a closed window's, and would
@@ -684,9 +701,26 @@ final class WindowManager: SurfaceRegistryDelegate {
                     controlFocus(here)
                     return
                 }
-                if let bundle, let pid = registry.surface(for: id)?.pid, AppMenus.press(menu: "File", item: "New Window", in: pid) {
-                    expectedLaunch = (bundle: bundle, at: hold.at)
-                    log("focus: parked \(id) (\(bundle)) took focus with none of the app on ws\(activeWorkspace) — asked it for a new window here; holding for it")
+                if let bundle, let pid = registry.surface(for: id)?.pid {
+                    // Give the app a moment to answer for itself first. "Activate
+                    // Safari" and "open this URL in Safari" arrive here identically,
+                    // and in the second case Safari is already making a window — or
+                    // has put the page in a tab. Asking immediately produced a blank
+                    // window beside a page the user could not see.
+                    let before = registry.allSurfaces.filter { $0.bundleID == bundle }.count
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                        guard let self else { return }
+                        if registry.allSurfaces.filter({ $0.bundleID == bundle }).count > before {
+                            log("focus: \(bundle) opened its own window — not asking for another")
+                            return
+                        }
+                        if workspaces[activeWorkspace]?.all.contains(where: { self.knownIdentity[$0]?.bundleID == bundle }) == true {
+                            return
+                        }
+                        guard AppMenus.press(menu: "File", item: "New Window", in: pid) else { return }
+                        expectedLaunch = (bundle: bundle, at: CACurrentMediaTime())
+                        log("focus: parked \(id) (\(bundle)) took focus with none of the app on ws\(activeWorkspace) — asked it for a new window here")
+                    }
                     return
                 }
             }
@@ -918,6 +952,11 @@ final class WindowManager: SurfaceRegistryDelegate {
         let activeApps = Set(workspace.all.compactMap { registry.surface(for: $0)?.pid })
         for pid in hiddenApps.intersection(activeApps) {
             hiddenApps.remove(pid)
+            // Only wake an app that has a window to show here. An app whose last
+            // window was closed has nothing to unhide, and an Electron app answers
+            // being unhidden with no windows by making one — which is how Discord
+            // reopened itself every time you came back to its workspace.
+            guard registry.allSurfaces.contains(where: { $0.pid == pid }) else { continue }
             NSRunningApplication(processIdentifier: pid)?.unhide()
             reparkAfterUnhide(pid)
         }
@@ -938,12 +977,15 @@ final class WindowManager: SurfaceRegistryDelegate {
             parkedCorner[id] = .bottomRight
             parkedSlivers[id] = surface.park(.bottomRight)
         }
+        // Remember which windows are arriving from a parked corner: those are off
+        // screen right now and the frame write below is exactly what brings them back.
+        let arriving = Set(workspace.all.filter { parked.contains($0) })
         for id in workspace.all where parked.contains(id) {
             parked.remove(id)
             parkedSlivers[id] = nil
             parkedCorner[id] = nil
         }
-        apply(frames)
+        apply(frames, arriving: arriving)
 
         // An app with nothing here is hidden whole: no sliver to place at all.
         // `hide()` returns false even on success, so wait on the truth instead.
@@ -1094,12 +1136,25 @@ final class WindowManager: SurfaceRegistryDelegate {
         canvas.update(canvasModel(workspace: activeWorkspace, frames: frames, active: actionTarget))
     }
 
-    private func apply(_ frames: [SurfaceID: CGRect]) {
+    private func apply(_ frames: [SurfaceID: CGRect], arriving: Set<SurfaceID> = []) {
+        // A window that is off screen, is not arriving from a parked corner, and whose
+        // app hyprmac has not hidden, has been put away by its own app. Writing its
+        // frame is what puts it back — and the evidence says that happens within
+        // milliseconds of the hide, because the sweep below never once caught such a
+        // window off screen across a whole test. Leave it where its app put it.
+        let onScreen = Accessibility.onScreenWindowIDs()
         for (id, rect) in frames {
             guard let surface = registry.surface(for: id), !surface.isMinimized else { continue }
+            if let onScreen, !arriving.contains(id), let ax = surface as? AXSurface,
+               !onScreen.contains(ax.windowID), !hiddenApps.contains(ax.pid) {
+                continue
+            }
             surface.setFrame(rect)
         }
         scheduleFitCheck()
+        // And look straight away rather than waiting for the next sweep: the window is
+        // hidden right now, and every relayout is a chance to notice it.
+        dropWindowsTheirAppsHid()
     }
 
     /// Float every tiled window whose known floor will not fit the tile it is about
@@ -1924,6 +1979,58 @@ extension WindowManager {
         else { return }
         log("report: opening a bug report to support@wisp-os.com (\(report.count) characters)")
         NSWorkspace.shared.open(url)
+    }
+
+    /// Let go of a window whose app has hidden it rather than closed it.
+    ///
+    /// Some apps — Discord among them — answer their close button by hiding the window
+    /// and keeping it alive. Accessibility still reports it, so nothing tells hyprmac
+    /// it is gone, and the next relayout writes its frame: the window the user just
+    /// closed reappears when they come back to that workspace.
+    ///
+    /// Only windows on the *active* workspace are considered, and that restriction is
+    /// the whole safety of this. A parked window is not on screen either — measured:
+    /// every Ghostty window on another workspace reads exactly the same as the hidden
+    /// Discord one — so a check written against all windows would throw away every
+    /// window the user was not currently looking at.
+    private func dropWindowsTheirAppsHid() {
+        guard let workspace = workspaces[activeWorkspace] else { return }
+        guard let onScreen = Accessibility.onScreenWindowIDs() else { return }
+        var stillMissing: Set<SurfaceID> = []
+        for id in workspace.all {
+            guard let surface = registry.surface(for: id) as? AXSurface else { continue }
+            guard !onScreen.contains(surface.windowID) else { continue }
+            // Say why, when it is off screen and kept anyway: the alternative is a
+            // sweep that quietly does nothing and no way to tell which test refused.
+            if parked.contains(id) || surface.isMinimized || hiddenApps.contains(surface.pid) {
+                log("gone? \(surface.appName) [\(id)] off screen but kept — parked=\(parked.contains(id)) minimized=\(surface.isMinimized) appHidden=\(hiddenApps.contains(surface.pid))")
+                continue
+            }
+            stillMissing.insert(id)
+            guard missingFromScreen.contains(id) else {
+                // First sighting. Confirm it in a moment rather than at the next
+                // three-second tick: the tile is still drawn on the canvas until this
+                // resolves, so the wait is something the user sits and looks at.
+                scheduleMissingRecheck()
+                continue
+            }
+            log("gone: \(surface.appName) [\(id)] is on this workspace but not on screen — its app hid it rather than closing it")
+            registry.forget(id)
+        }
+        missingFromScreen = stillMissing
+    }
+
+    /// A second look, soon. Two sightings before letting go of a window is what keeps
+    /// a momentary absence — an app mid-hide, a window not yet mapped — from being
+    /// mistaken for one the user closed; 300 ms is long enough to tell those apart and
+    /// short enough that nobody watches an empty tile waiting for it.
+    private func scheduleMissingRecheck() {
+        guard !recheckScheduled else { return }
+        recheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.recheckScheduled = false
+            self?.dropWindowsTheirAppsHid()
+        }
     }
 
     /// Every window in every workspace, as its application's icon. Icons are cheap

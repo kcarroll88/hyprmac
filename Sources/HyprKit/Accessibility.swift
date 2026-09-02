@@ -55,6 +55,42 @@ public enum Accessibility {
         return order
     }
 
+    /// The topmost ordinary window at a screen point, whoever owns it.
+    ///
+    /// Cheaper than asking Accessibility — one call to the window server, no round
+    /// trip into another app's main thread — and, unlike hyprmac's own registry, it
+    /// sees windows hyprmac does not manage: floating panels, dialogs, and the
+    /// picture-in-picture window that used to start a drag of whatever tiled window
+    /// happened to lie beneath it. Layer 0 is the ordinary window layer; the menu bar,
+    /// the Dock and hyprmac's own canvas are not in it.
+    public static func windowUnderPointer(_ point: CGPoint) -> CGWindowID? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for info in list {
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"]
+            else { continue }
+            if CGRect(x: x, y: y, width: w, height: h).contains(point) {
+                return info[kCGWindowNumber as String] as? CGWindowID
+            }
+        }
+        return nil
+    }
+
+    /// Every ordinary window the window server currently has on screen.
+    /// Nil means the window server would not answer. An *empty set* is a real answer
+    /// and a common one: on a workspace holding a single app, every other app is
+    /// hidden, so when that app hides its own window there is genuinely nothing on
+    /// screen. Conflating the two — treating empty as "no evidence" — is what stopped
+    /// hyprmac letting go of a window it had correctly spotted as hidden, twice.
+    public static func onScreenWindowIDs() -> Set<CGWindowID>? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        return Set(list.compactMap { info in
+            (info[kCGWindowLayer as String] as? Int) == 0 ? info[kCGWindowNumber as String] as? CGWindowID : nil
+        })
+    }
+
     static func windowID(of element: AXUIElement) -> CGWindowID? {
         var id: CGWindowID = 0
         return _AXUIElementGetWindow(element, &id) == .success && id != 0 ? id : nil

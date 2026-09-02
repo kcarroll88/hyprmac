@@ -90,15 +90,31 @@ public final class SurfaceRegistry {
 
     /// Full sweep of every running app. Cheap enough to call on a timer as a backstop.
     public func rescan() {
+        // The sweep only adopts windows the window server is actually showing. A window
+        // its app has hidden rather than closed stays alive and tileable to
+        // Accessibility, so without this the sweep re-adopts the thing that was just
+        // let go of, three seconds later, for ever. New windows are not affected: they
+        // arrive by notification, and this is only the backstop.
+        let onScreen = Accessibility.onScreenWindowIDs()
         for app in NSWorkspace.shared.runningApplications where isManageable(app) {
             attach(to: app, retriesRemaining: 0)
-            adopt(windowsOf: app)
+            adopt(windowsOf: app, onlyIfOnScreen: onScreen)
         }
         // Evict anything whose window has gone without us hearing about it.
         for (id, surface) in surfaces where !surface.isAlive {
             surfaces[id] = nil
             delegate?.registry(self, didRemove: id)
         }
+    }
+
+    /// Forget a window without waiting to be told it died. An app that hides a window
+    /// rather than destroying it leaves the element alive and answering, so `isAlive`
+    /// stays true and the eviction sweep above never fires — and the window manager
+    /// goes on managing something the user believes is closed.
+    public func forget(_ id: SurfaceID) {
+        guard surfaces[id] != nil else { return }
+        surfaces[id] = nil
+        delegate?.registry(self, didRemove: id)
     }
 
     private func isManageable(_ app: NSRunningApplication) -> Bool {
@@ -108,7 +124,7 @@ public final class SurfaceRegistry {
         return true
     }
 
-    private func adopt(windowsOf app: NSRunningApplication) {
+    private func adopt(windowsOf app: NSRunningApplication, onlyIfOnScreen onScreen: Set<CGWindowID>? = nil) {
         let element = AXUIElementCreateApplication(app.processIdentifier)
         guard let windows: [AXUIElement] = element.attribute(kAXWindowsAttribute) else { return }
         for window in windows {
@@ -117,6 +133,7 @@ public final class SurfaceRegistry {
                                           appName: app.localizedName ?? "?",
                                           bundleID: app.bundleIdentifier) else { continue }
             guard surfaces[surface.id] == nil, surface.isTileable || surface.isMinimized else { continue }
+            if let onScreen, !surface.isMinimized, !onScreen.contains(surface.windowID) { continue }
             surfaces[surface.id] = surface
             delegate?.registry(self, didAdd: surface)
         }

@@ -41,8 +41,12 @@ final class WorkspaceOverview {
         if isVisible { hide() } else { show(items: items, accent: accent) }
     }
 
-    func hide() {
-        panel?.dismiss()
+    /// `restoringFocus` is for *cancelling*: escape puts you back where you were.
+    /// Committing to a workspace must not, because the app it would re-activate is one
+    /// whose windows the switch has just parked — and hyprmac reads an activation of an
+    /// app with nothing on the current workspace as a request for a window here.
+    func hide(restoringFocus: Bool = true) {
+        panel?.dismiss(restoringFocus: restoringFocus)
         panel = nil
     }
 
@@ -84,11 +88,11 @@ final class WorkspaceOverview {
         panel.accent = accent
         panel.selection = items.firstIndex { $0.isActive } ?? 0
         panel.onPick = { [weak self] index in
-            self?.hide()
+            self?.hide(restoringFocus: false)
             self?.onPick?(index)
         }
         panel.onPickWindow = { [weak self] id in
-            self?.hide()
+            self?.hide(restoringFocus: false)
             self?.onPickWindow?(id)
         }
         panel.onReorder = { [weak self] from, to in
@@ -246,8 +250,8 @@ final class OverviewPanel: OverlayPanel {
         makeKey()
     }
 
-    func dismiss() {
-        let restore = previouslyActive
+    func dismiss(restoringFocus: Bool = true) {
+        let restore = restoringFocus ? previouslyActive : nil
         fadeOut { [weak self] in
             restore?.activate()
             self?.onDismiss?()
@@ -449,9 +453,19 @@ final class IconButton: NSView {
     }
     override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
-    override func mouseDown(with event: NSEvent) { /* swallow, so the card does not start a drag */ }
+    private var pressed = false
+    override func mouseDown(with event: NSEvent) {
+        // Swallowed so the card underneath does not start a workspace drag.
+        pressed = true
+    }
     override func mouseUp(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)), let surface else { return }
+        defer { pressed = false }
+        // Forgiving on purpose. Requiring the release to land inside a 20-point icon
+        // meant a click that drifted a pixel did nothing — and because the press was
+        // swallowed, the card underneath never saw it either, so the overview simply
+        // sat there. A hand is not a machine; anything near the icon is a click on it.
+        let p = convert(event.locationInWindow, from: nil)
+        guard pressed, bounds.insetBy(dx: -10, dy: -10).contains(p), let surface else { return }
         onPick?(surface)
     }
 }

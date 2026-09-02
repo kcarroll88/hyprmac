@@ -26,6 +26,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Polls for the Accessibility grant while the app is running without it.
     private var trustPoll: Timer?
+    /// A menu bar presence while waiting. Without one, hyprmac waiting for the grant
+    /// is a process with no Dock icon, no menu bar item and no window once the setup
+    /// screen is closed: invisible, unquittable, and enough to stop the app being
+    /// deleted because macOS says it is still running.
+    private var waitingItem: NSStatusItem?
+
+    private func showWaitingStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "hyprmac ·"
+        item.button?.toolTip = "hyprmac is waiting for Accessibility"
+        let menu = NSMenu()
+        let waiting = NSMenuItem(title: "Waiting for Accessibility…", action: nil, keyEquivalent: "")
+        waiting.isEnabled = false
+        menu.addItem(waiting)
+        let setup = NSMenuItem(title: "Setup…", action: #selector(openSetup), keyEquivalent: "")
+        setup.target = self
+        menu.addItem(setup)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit hyprmac", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        quit.target = NSApp
+        menu.addItem(quit)
+        item.menu = menu
+        waitingItem = item
+    }
+
+    @objc private func openSetup() { WelcomeWindow.shared.showWaitingForAccessibility() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Without Accessibility every AX call fails silently, so hyprmac used to
@@ -36,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard Accessibility.isTrusted else {
             Accessibility.requestTrust()
             log("waiting for Accessibility — no window is managed until it is granted")
+            showWaitingStatusItem()
             WelcomeWindow.shared.showWaitingForAccessibility()
             // The grant only reaches a newly launched process, so when it lands the
             // only useful thing to do is start again. Closing the window does not

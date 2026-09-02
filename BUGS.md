@@ -4,11 +4,18 @@ Found during the 0.1.0 beta, to be fixed in a batch. Newest first. Each entry sa
 what was seen, not what I guess is wrong — a diagnosis written before the repro is
 run is how the last three of these took several attempts each.
 
-Status: **open** unless marked otherwise.
+Status: **open** unless marked otherwise. Six were fixed on 2 Sep; what each entry
+says about its cause is what turned out to be true, not what was guessed first.
 
 ---
 
 ## 7. Safari opens a blank window here and the page in a tab over there
+
+**Half fixed, 2 Sep.** hyprmac now waits 0.7 s and does not ask for a window if the app
+made one itself, which covers the case where Safari opens a *window*. The **tab** case
+remains: the only signal is an existing window's title changing, and terminals change
+their titles constantly, so that heuristic would break "click Ghostty in the Dock, get
+a window here". Trading one bug for another is not a fix. **Still open.**
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
 
@@ -50,6 +57,10 @@ breaks was itself a fix for a real complaint, so the answer is not to remove it.
 ---
 
 ## 6. A window sometimes changes workspace when switching quickly
+
+**Fixed 2 Sep.** Exactly as narrowed: `dismiss()` re-activated the previously frontmost
+app 0.22 s after the switch it triggered. Restoring focus now happens only when the
+overview is *cancelled*, never when a workspace is chosen.
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
 
@@ -113,6 +124,20 @@ than leaving us to guess between the candidates below.
 
 ## 5. Discord reopens its window when you return to the workspace
 
+**Fixed 2 Sep, and the first three attempts were wrong.** Discord hides its window
+rather than destroying it; Accessibility keeps reporting it, so hyprmac went on managing
+a window the user had closed, and every relayout wrote its frame — which un-hid it.
+Three parts: do not write a frame to a window its app has hidden, let go of it, and do
+not let the three-second rescan re-adopt it.
+
+The fix then sat there not working, because of a guard inside it: `guard !onScreen.isEmpty`,
+written as "an empty answer is not evidence". On a workspace holding one app every other
+app is hidden, so when that app hides its own window the true answer *is* zero — the
+paranoia fired precisely when the fix was needed. An empty set and a refused call are
+now different things. Releasing the tile takes about half a second: two sightings 300 ms
+apart, because one glance at "not on screen" is the kind of evidence that is occasionally
+wrong, and the cost of being wrong is throwing away a window still in use.
+
 **Build:** 20260902-1312 · **Reported:** 2 Sep
 
 **What happens.** Close the Discord window. Discord keeps running with no window, which
@@ -141,6 +166,11 @@ been hidden by one either.
 ---
 
 ## 4. Dragging a floating window drags the tiled window underneath it too
+
+**Fixed 2 Sep.** The drag candidate asks the window server what is actually under the
+pointer (`CGWindowListCopyWindowInfo`, not an Accessibility round trip on every click),
+so windows hyprmac does not manage are seen. A refusal to answer falls back to geometry,
+so it fails open rather than refusing to drag.
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
 
@@ -234,6 +264,10 @@ values per device.
 
 ## 2. Closing the setup window leaves hyprmac running invisibly
 
+**Fixed 2 Sep.** There is a menu bar item while waiting — *Waiting for Accessibility…*,
+Setup…, Quit — so hyprmac is visible and quittable before it manages anything, and does
+not block deleting the app.
+
 **Build:** 20260902-1312 · **Reported:** 2 Sep
 
 **What happens.** Launch hyprmac without the Accessibility grant. The setup window
@@ -259,6 +293,10 @@ nothing has ever started; or both. Second one is simplest, first is kinder.
 ---
 
 ## 1. The overview stays open after clicking a window
+
+**Fixed 2 Sep.** Not any of the three candidates. `IconButton` required the release to
+land inside a 20-point icon and swallowed the press, so the card beneath never saw it
+either: a click that drifted a pixel did nothing at all. Forgiving within 10 points now.
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
 
