@@ -8,6 +8,50 @@ Status: **open** unless marked otherwise.
 
 ---
 
+## 4. Dragging a floating window drags the tiled window underneath it too
+
+**Build:** 20260902-1312 · **Reported:** 2 Sep
+
+**What happens.** A Safari extension's automatic picture-in-picture window sits on top
+of the tiling. Dragging that PiP window by hand also starts hyprmac's own window drag on
+whatever tiled window is beneath it, so one gesture moves two windows and can end in a
+swap nobody asked for. The two need treating as separate things.
+
+**Cause — high confidence, from reading `windowDrag.candidate` (`WindowManager.swift`).**
+The candidate for a drag is chosen on geometry alone:
+
+```swift
+for id in ws.tiled {
+    guard let f = registry.surface(for: id)?.frame, f.contains(p), p.y - f.minY < 34 else { continue }
+    return (id, f)
+}
+```
+
+A press within the top 34 points of a tiled window's *frame* starts a drag of that
+window. Nothing checks what is actually under the pointer. A PiP window — floating,
+borrowed by another app, and not in hyprmac's registry at all, since the registry only
+adopts tileable windows — is invisible to that test: press its title area where it
+overlaps a tiled window's strip, and hyprmac grabs the window underneath. The same must
+be true of any floating window, any dialog, and any window hyprmac does not manage.
+
+**The fix is to ask who is really there, not to guess from rectangles.** Options, best
+first:
+
+1. `AXUIElementCopyElementAtPosition` for the press point, walk up to its window, and
+   only proceed if that window is the tiled one we think we are grabbing. Correct for
+   every case — floating windows, unmanaged windows, other apps' overlays — because it
+   asks the system rather than reasoning from hyprmac's own incomplete picture.
+2. `Accessibility.stackingOrder()` is already used by `placeSlivers`, and could reject a
+   candidate that is not topmost at that point. Cheaper, but only knows about windows
+   hyprmac has seen, which is exactly what a PiP window is not.
+3. Reject presses that land inside any window in `workspace.floating`. Fixes floating
+   windows hyprmac knows about and does nothing for this bug.
+
+Worth measuring the cost of (1) on mouse-down before committing to it: it is an AX
+round-trip on every click, and the press handler runs on a global monitor.
+
+---
+
 ## 3. The swipe needs a much bigger movement on one Mac than the other
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
