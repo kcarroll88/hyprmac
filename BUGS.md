@@ -8,6 +8,47 @@ Status: **open** unless marked otherwise.
 
 ---
 
+## 7. Safari opens a blank window here and the page in a tab over there
+
+**Build:** 20260902-1312 · **Reported:** 2 Sep
+
+**What happens.** Something asks Safari to open a page. Safari puts it in a new tab of
+the window it already has — on another workspace — and hyprmac adds an empty Safari
+window on the workspace you are standing on. You end up with a blank window in front of
+you and the thing you asked for somewhere you cannot see.
+
+**Cause — this is the cost of a feature added the same day, and it is mine.** When an
+app is activated and has no window on the current workspace, hyprmac presses File ▸ New
+Window in that app's own menu bar, so that clicking Safari in the Dock gives you a
+Safari window *here* rather than teleporting you to wherever Safari happens to live.
+That is right for "activate Safari" and wrong for "open this URL in Safari": in the
+second case Safari has already handled the request, in a tab, in the window it already
+had — and hyprmac's extra window is empty and unwanted. From the activation alone the
+two are indistinguishable, which is the whole difficulty.
+
+**What it should do** (the reported preference, and it is the right rule): the request
+should land where it was made — a new window on this workspace, or a new tab if that
+app already has a window here.
+
+**Options, none free.**
+
+1. **Wait before pressing.** On activation with nothing here, hold ~800 ms. If the app
+   produces a window of its own in that time, use that one — moving it here if it
+   opened elsewhere — and never press New Window. Fixes the case where Safari opens a
+   window, does nothing for the case where it opens a *tab*, and delays the Dock-click
+   path for everyone.
+2. **Notice the app handled it.** An existing window's title changing right after the
+   activation means the request was absorbed by a tab. Detectable, and fragile: it is a
+   heuristic about timing dressed up as a fact.
+3. **Fix what hyprmac controls.** hyprmac's own `exec` binds that open URLs can ask for
+   a new window explicitly rather than letting the app choose. Correct and complete for
+   hyprmac's own binds, and does nothing for a link clicked in another app.
+
+(1) and (3) together cover most of it honestly. Worth remembering that the feature this
+breaks was itself a fix for a real complaint, so the answer is not to remove it.
+
+---
+
 ## 6. A window sometimes changes workspace when switching quickly
 
 **Build:** 20260902-1312 · **Reported:** 2 Sep
