@@ -15,7 +15,38 @@ Status: **open** unless marked otherwise.
 **What happens.** Switching workspaces in quick succession occasionally leaves a window
 on a different workspace than the one it was on. Intermittent.
 
-**Not yet diagnosed, and it needs the journal to catch it.** hyprmac writes a line for
+**Narrowed 2 Sep: it happens when picking a workspace from the overview.** That is a
+specific enough path to read, and there is an ordering problem in it.
+
+```swift
+panel.onPick = { self?.hide(); self?.onPick?(index) }   // hide() → dismiss(), then switch
+func dismiss() { let restore = previouslyActive; fadeOut { restore?.activate() } }
+```
+
+`hide()` starts a 0.22-second fade and schedules `restore?.activate()` for when it
+finishes; `onPick` then dispatches the workspace switch **immediately**. So the
+workspace changes first, and a fifth of a second later hyprmac re-activates whatever
+app was frontmost *before* the overview opened — an app whose windows have just been
+parked by that very switch.
+
+An activation of an app with nothing on the current workspace is precisely what the
+parked-focus logic in `didFocus` exists to interpret, and it has three branches: follow
+the parked window to its home workspace, focus a window of that app here, or — the one
+added most recently — **ask the app for a new window here** via File ▸ New Window.
+That last branch creates a window on the workspace you just arrived at, from an
+activation the user never performed. `lastSwitch` guards this for half a second, and a
+0.22-second fade plus activation latency plus the AX notification is close enough to
+that boundary to be a race rather than a rule, which fits "sometimes".
+
+**Where to look first:** the journal will name it — `[added surface#…]` right after a
+`workspace` dispatch means the new-window branch fired.
+
+**Fix direction.** The restore in `dismiss()` is for *cancelling* the overview, not for
+committing to a choice: picking a workspace should not re-activate the app you were
+looking at before. Separating dismiss-by-escape from dismiss-by-pick is likely the
+whole fix, and `lastSwitch` should cover the activation that follows either way.
+
+**Still worth catching in the wild,** in case it also happens without the overview: hyprmac writes a line for
 every tree change with the cause that made it — `tree ws2: … -> … [dispatch
 moveToWorkspace(3)]`, `[added surface#…]`, `[drag swap …]`. When this happens next,
 note roughly when, and `~/Library/Logs/hyprmac.log` will name the mechanism rather
