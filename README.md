@@ -5,9 +5,10 @@
 with a mouse from the first minute. Native Swift, no dependencies, System Integrity
 Protection stays on.
 
-[![hyprmac in action](docs/poster.png)](docs/hyprmac.mp4)
+![hyprmac in action](docs/hyprmac.gif)
 
-*(45 seconds — [download the clip](docs/hyprmac.mp4) if it does not play inline.)*
+*[Watch the full 45 seconds, with sound](https://github.com/kcarroll88/hyprmac/releases/latest) —
+GitHub will not play an MP4 inline from a repository path, so the clip above is a GIF.*
 
 ---
 
