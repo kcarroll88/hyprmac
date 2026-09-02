@@ -7,7 +7,7 @@ Protection stays on.
 
 ![hyprmac in action](docs/hyprmac.gif)
 
-*[Watch the full 45 seconds, with sound](https://github.com/kcarroll88/hyprmac/releases/latest) —
+*[Watch the full minute, with sound](https://github.com/kcarroll88/hyprmac/releases/latest) —
 GitHub will not play an MP4 inline from a repository path, so the clip above is a GIF.*
 
 ---
