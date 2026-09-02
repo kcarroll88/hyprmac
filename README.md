@@ -94,3 +94,8 @@ rebuild.
 - [NOTES.md](NOTES.md) — the long form: how parking works, what was measured, which
   approaches failed and why. Written as it was built.
 - [BUGS.md](BUGS.md) — the open bug log for this beta.
+
+**Found something?** `Report a Bug…` in hyprmac's menu bar opens a mail draft to
+support@wisp-os.com with the build, your macOS version, your Mac model, display count
+and the last of the log already filled in — you only write what happened. Or open an
+issue here.

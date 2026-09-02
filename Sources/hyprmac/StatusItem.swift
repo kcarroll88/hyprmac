@@ -18,6 +18,7 @@ final class StatusItemController {
     var onRenameWorkspace: ((Int) -> Void)?
     var onShowKeybindings: (() -> Void)?
     var onShowWelcome: (() -> Void)?
+    var onReportBug: (() -> Void)?
     var onReload: (() -> Void)?
     var onQuit: (() -> Void)?
 
@@ -98,6 +99,9 @@ final class StatusItemController {
         // The one screen hyprmac has, reachable on purpose rather than only when it
         // decides to appear: permissions, the trackpad gesture, and the keys.
         menu.addItem(entry(title: "Setup…", action: #selector(showWelcome)))
+        // The moment someone hits a bug is the only moment they will report one.
+        // Anything that asks them to find a log file first is a report never written.
+        menu.addItem(entry(title: "Report a Bug…", action: #selector(reportBug)))
         menu.addItem(entry(title: "Reload Configuration", action: #selector(reload)))
         menu.addItem(.separator())
         menu.addItem(entry(title: "Quit hyprmac", action: #selector(quit)))
@@ -114,6 +118,7 @@ final class StatusItemController {
     @objc private func renameWorkspace(_ sender: NSMenuItem) { onRenameWorkspace?(sender.tag) }
     @objc private func showKeybindings() { onShowKeybindings?() }
     @objc private func showWelcome() { onShowWelcome?() }
+    @objc private func reportBug() { onReportBug?() }
     @objc private func reload() { onReload?() }
     @objc private func quit() { onQuit?() }
 }

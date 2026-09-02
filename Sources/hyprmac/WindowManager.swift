@@ -479,6 +479,7 @@ final class WindowManager: SurfaceRegistryDelegate {
         statusItem.onSelectWorkspace = { [weak self] in self?.dispatch(.workspace($0)) }
         statusItem.onRenameWorkspace = { [weak self] index in self?.promptRename(workspace: index) }
         statusItem.onShowKeybindings = { [weak self] in self?.dispatch(.cheatsheet) }
+        statusItem.onReportBug = { [weak self] in self?.reportBug() }
         statusItem.onShowWelcome = { [weak self] in
             guard let self else { return }
             WelcomeWindow.shared.showOnDemand(usesVerticalSwipe: config.gestureOverview)
@@ -1876,6 +1877,53 @@ extension WindowManager {
             NSLog("terminal: quitting empty Ghostty instance \(app.processIdentifier)")
             app.terminate()
         }
+    }
+
+    /// Open a mail draft to support with everything that would otherwise have to be
+    /// asked for: which build, which Mac, how many displays, and what the journal said
+    /// just before. A bug report costs the reporter nothing but the description, which
+    /// is the only part they can actually supply.
+    private func reportBug() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        var model = [CChar](repeating: 0, count: 64)
+        var size = model.count
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+
+        var report = """
+            What happened:
+
+
+            What you expected instead:
+
+
+            How to make it happen again:
+
+
+            ---- diagnostics, please leave this in ----
+            hyprmac \(info["CFBundleShortVersionString"] as? String ?? "?") (build \(info["CFBundleVersion"] as? String ?? "?"))
+            \(ProcessInfo.processInfo.operatingSystemVersionString)
+            \(String(cString: model))
+            displays: \(NSScreen.screens.count) · workspaces: \(config.workspaceCount) · windows: \(homeWorkspace.count)
+            accessibility: \(Accessibility.isTrusted ? "allowed" : "NOT allowed")
+
+            """
+        // The tail of the journal, trimmed: a mailto that grows past a few thousand
+        // characters is silently truncated by some mail clients, and a truncated
+        // report is worse than a short one.
+        if let log = try? String(contentsOf: URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/hyprmac.log"), encoding: .utf8) {
+            let tail = log.split(separator: "\n").suffix(40).joined(separator: "\n")
+            report += "\nlast 40 log lines:\n" + String(tail.suffix(3500))
+        }
+
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=?+#")
+        let subject = "hyprmac \(info["CFBundleVersion"] as? String ?? "") — bug report"
+        guard let s = subject.addingPercentEncoding(withAllowedCharacters: allowed),
+              let b = report.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: "mailto:support@wisp-os.com?subject=\(s)&body=\(b)")
+        else { return }
+        log("report: opening a bug report to support@wisp-os.com (\(report.count) characters)")
+        NSWorkspace.shared.open(url)
     }
 
     /// Every window in every workspace, as its application's icon. Icons are cheap
