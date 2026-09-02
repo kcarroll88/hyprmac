@@ -124,6 +124,11 @@ final class WindowManager: SurfaceRegistryDelegate {
     /// not mistaken for one the app has put away.
     private var missingFromScreen: Set<SurfaceID> = []
     private var recheckScheduled = false
+    /// Apps with a new-window request already in flight, and when each was last asked.
+    /// One activation arrives as several focus notifications — measured: three inside
+    /// 330 ms — and without this each one asked Safari for a window of its own.
+    private var askingForWindow: Set<String> = []
+    private var lastAskedForWindow: [String: CFTimeInterval] = [:]
     /// How many times the hotkeys have been registered without every bind taking.
     private var bindAttempts = 0
     private var relayoutScheduled = false
@@ -702,6 +707,20 @@ final class WindowManager: SurfaceRegistryDelegate {
                     return
                 }
                 if let bundle, let pid = registry.surface(for: id)?.pid {
+                    // One request per app at a time, and not again for five seconds.
+                    guard !askingForWindow.contains(bundle),
+                          CACurrentMediaTime() - (lastAskedForWindow[bundle] ?? 0) > 5 else { return }
+                    // And only when a person just did something. An app activating
+                    // itself — because another program asked it to open a URL, which it
+                    // may well answer in a tab of a window on another workspace — is not
+                    // a request for a window here, and answering it with one produces a
+                    // blank window nobody asked for and cannot explain.
+                    let recent = lastInput.map { CACurrentMediaTime() - $0.at < 2.0 } ?? false
+                    guard recent else {
+                        log("focus: \(bundle) activated with nothing here, but no one touched the keyboard or trackpad — not asking for a window")
+                        return
+                    }
+                    askingForWindow.insert(bundle)
                     // Give the app a moment to answer for itself first. "Activate
                     // Safari" and "open this URL in Safari" arrive here identically,
                     // and in the second case Safari is already making a window — or
@@ -710,6 +729,8 @@ final class WindowManager: SurfaceRegistryDelegate {
                     let before = registry.allSurfaces.filter { $0.bundleID == bundle }.count
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                         guard let self else { return }
+                        askingForWindow.remove(bundle)
+                        lastAskedForWindow[bundle] = CACurrentMediaTime()
                         if registry.allSurfaces.filter({ $0.bundleID == bundle }).count > before {
                             log("focus: \(bundle) opened its own window — not asking for another")
                             return

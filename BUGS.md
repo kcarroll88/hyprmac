@@ -11,7 +11,24 @@ says about its cause is what turned out to be true, not what was guessed first.
 
 ## 7. Safari opens a blank window here and the page in a tab over there
 
-**Half fixed, 2 Sep.** hyprmac now waits 0.7 s and does not ask for a window if the app
+**Worse than logged, and partly fixed again 2 Sep.** Seen live: *three* blank Safari
+windows at once, while the page went to a tab already open on another workspace. The
+journal showed three "asked it for a new window here" inside 330 ms — one activation
+arrives as several focus notifications, and every one of them asked for a window of its
+own. Two of the three were then too narrow for Safari's minimum and got floated, so they
+appeared as blank floating windows over the tiling.
+
+Two guards added. Only one request per app may be in flight, and not another for five
+seconds. And a request is only made when a person has touched the keyboard or trackpad
+in the last two seconds: an app activating itself — because another program asked it to
+open a URL, which it may answer in a tab somewhere else entirely — is not somebody asking
+for a window here. That is the case that produced blank windows with no explanation.
+
+Still open: a URL opened *by hand* into a tab of a window on another workspace. hyprmac
+cannot see tabs, so it cannot move the page to where you are, and it cannot tell that
+outcome from a legitimate "give me a window here".
+
+**Earlier, 2 Sep.** hyprmac waits 0.7 s and does not ask for a window if the app
 made one itself, which covers the case where Safari opens a *window*. The **tab** case
 remains: the only signal is an existing window's title changing, and terminals change
 their titles constantly, so that heuristic would break "click Ghostty in the Dock, get
