@@ -1,0 +1,10 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+*.xcodeproj
+dist/
+
+# A personal working document rather than documentation, and about Wisp OS as a whole
+# rather than hyprmac, which is what this repository is.
+progress.html

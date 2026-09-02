@@ -1,0 +1,33 @@
+#!/bin/bash
+# Talk to the running Wisp OS over its control socket. The hyprctl of this project.
+#
+#   wispctl status                  # workspaces, windows, what is focused, the date
+#   wispctl windows                 # every managed window, flat
+#   wispctl screen [id|name]        # readable text of the focused window, one by id, or "news"
+#   wispctl dispatch <name> [arg]   # any dispatcher from the config: workspace 3, movefocus l …
+#   wispctl focus <id>              # switch to that window's workspace and focus it
+#   wispctl terminal [dir] [cmd] [workspace]   # a new window in the RUNNING Ghostty, cd'd there, running cmd — on that workspace, without following
+#   wispctl say "focus left"         # run spoken words through the voice grammar
+#
+# One JSON object in, one out. Wisper's tools call this; so can you.
+set -euo pipefail
+SOCK="${TMPDIR:-/tmp}/hyprmac.sock"
+[ -S "$SOCK" ] || { echo "wispctl: Wisp OS is not running (no socket at $SOCK)" >&2; exit 1; }
+
+json_string() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+case "${1:-}" in
+    status|windows) req="{\"cmd\":\"$1\"}" ;;
+    screen)   if [[ "${2:-}" =~ ^[0-9]+$ ]]; then req="{\"cmd\":\"screen\",\"id\":$2}"
+              elif [ -n "${2:-}" ]; then req="{\"cmd\":\"screen\",\"match\":$(json_string "$2")}"
+              else req="{\"cmd\":\"screen\"}"; fi ;;
+    dispatch) [ $# -ge 2 ] || { echo "usage: wispctl dispatch <name> [arg]" >&2; exit 2; }
+              req="{\"cmd\":\"dispatch\",\"name\":$(json_string "$2"),\"arg\":$(json_string "${3:-}")}" ;;
+    terminal) req="{\"cmd\":\"terminal\",\"dir\":$(json_string "${2:-}"),\"run\":$(json_string "${3:-}")${4:+,\"workspace\":$4}}" ;;
+    focus)    [ $# -ge 2 ] || { echo "usage: wispctl focus <id|name>" >&2; exit 2; }
+              if [[ "$2" =~ ^[0-9]+$ ]]; then req="{\"cmd\":\"focus\",\"id\":$2}"; else req="{\"cmd\":\"focus\",\"match\":$(json_string "$2")}"; fi ;;
+    say)      [ $# -ge 2 ] || { echo "usage: wispctl say <words>" >&2; exit 2; }
+              req="{\"cmd\":\"say\",\"text\":$(json_string "$2")}" ;;
+    *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
+printf '%s\n' "$req" | nc -U "$SOCK"
