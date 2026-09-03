@@ -9,6 +9,43 @@ says about its cause is what turned out to be true, not what was guessed first.
 
 ---
 
+## 8. Windows come back on the wrong workspaces after sleep
+
+**Build:** 20260902-1822 · **Reported:** 3 Sep, on both machines
+
+**What happens.** Sleep overnight, wake, and windows are scattered — several from
+different workspaces piled onto the one that was active. The journal for the wake:
+
+```
+08:12:49  wake: slept 30232 s — 10 records and 4 tree slots aged none of it
+08:12:53  tree ws2: empty -> 9012 | (9026 / (18619 | (12435 / (1828 | (16503 / 16563)))))
+          [added surface#16563 Notes inserted at the focused tile]
+```
+
+1828 and 16503 belong to ws1 and are sitting inside ws2's tree.
+
+**Not diagnosed, and the journal cannot say why.** At sleep, Accessibility drops every
+window and hyprmac writes a closed-window record for each; at wake they are re-added and
+those records should send each home. Something did not match. The clocks are not an
+obvious culprit — the records are stamped on a clock that stops while the machine sleeps,
+and the wake line confirms they "aged none of it".
+
+**Two changes made, 3 Sep.**
+
+*Every placement now says where and why*: `place: surface#… App → ws2 (its own record |
+the saved session | no record — where you are)`. The tree journal records one cause per
+relayout, so when a dozen windows arrive together after a wake it names the last of them
+and is silent about the rest — which is exactly the case that needs explaining.
+
+*Closed-window records now last twelve hours instead of ten minutes.* They are matched by
+exact window id, so a stale one can only ever be claimed by the very window that made it;
+that is quite unlike the launch pool, which matches by app and title and must expire
+quickly. Ten minutes was chosen for a window Accessibility drops and re-reports within
+seconds, and is plainly too short for a machine that sleeps overnight. This may be the
+whole fix or none of it — the next wake will say, in one line per window.
+
+---
+
 ## 7. Safari opens a blank window here and the page in a tab over there
 
 **Worse than logged, and partly fixed again 2 Sep.** Seen live: *three* blank Safari

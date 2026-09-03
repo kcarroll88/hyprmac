@@ -105,4 +105,15 @@ struct VoiceGrammarTests {
         #expect(VoiceGrammar.parse("the quick brown fox") == .unrecognized("the quick brown fox"))
         #expect(VoiceGrammar.parse("") == .unrecognized(""))
     }
+
+    @Test func goingToAWorkspaceHoweverItIsSaid() {
+        // The QA sweep's phrasings, 2 September: two of six hit the old prefix list.
+        let ways = ["go to workspace 3", "workspace three", "take me to 3", "switch over to the third workspace",
+                    "uh can you put me on workspace 3", "jump to three", "hop over to 3", "can you flip me to the third one",
+                    "workspace 3 please", "let's head to space 3"]
+        for said in ways { #expect(VoiceGrammar.parse(said) == .dispatch(.workspace(3)), Comment(rawValue: said)) }
+        // A window being moved is not the person going; a question is not a command.
+        #expect(VoiceGrammar.parse("send this window to workspace 3") == .dispatch(.moveToWorkspace(3)))
+        #expect(VoiceGrammar.parse("what workspace am i on") != .dispatch(.workspace(3)))
+    }
 }

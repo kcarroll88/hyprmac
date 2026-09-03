@@ -18,6 +18,18 @@ final class WindowManager: SurfaceRegistryDelegate {
     private let overview = WorkspaceOverview()
     /// Names set at runtime, layered over whatever the config declared.
     private var renamedWorkspaces: [Int: String] = WorkspaceNameStore.load()
+    /// "ᵃˢˢᶜʳᵃᶜᵏᵉʳ¹²³" and "asscracker" are one name: fold superscripts, accents
+    /// and decoration down to plain lowercase letters and digits.
+    static func foldName(_ s: String) -> String {
+        let map: [Character: Character] = ["ᵃ":"a","ᵇ":"b","ᶜ":"c","ᵈ":"d","ᵉ":"e","ᶠ":"f","ᵍ":"g","ʰ":"h","ⁱ":"i","ʲ":"j","ᵏ":"k","ˡ":"l","ᵐ":"m","ⁿ":"n","ᵒ":"o","ᵖ":"p","ʳ":"r","ˢ":"s","ᵗ":"t","ᵘ":"u","ᵛ":"v","ʷ":"w","ˣ":"x","ʸ":"y","ᶻ":"z",
+                                           "⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9"]
+        let mapped = String(s.map { map[$0] ?? $0 })
+        let plain = mapped.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: nil).lowercased()
+        return plain.filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// How the last `chat` into each window went: pending, sent, or why not.
+    private var chatOutcomes: [UInt64: String] = [:]
 
     private var workspaces: [Int: Workspace] = [:]
     private var activeWorkspace = 1
@@ -555,7 +567,14 @@ final class WindowManager: SurfaceRegistryDelegate {
         // only windows that go elsewhere are not new — the same window re-reported
         // (a closed-window record, claimed by exact id), or a window found at launch
         // that the saved session places. Nothing here decides where you meant it.
-        reclaims.removeAll { CACurrentMediaTime() - $0.at > 600 }
+        // Twelve hours, not ten minutes. These are matched by exact window id, so a
+        // stale one can only ever be claimed by the very window that made it — unlike
+        // the launch pool, which matches by app and title and must expire quickly. Ten
+        // minutes was enough for a window Accessibility dropped and re-reported, and
+        // far too little for a machine that sleeps overnight and wakes with every
+        // window arriving at once.
+        reclaims.removeAll { CACurrentMediaTime() - $0.at > 43_200 }
+        if reclaims.count > 400 { reclaims.removeFirst(reclaims.count - 400) }
         let claim = reclaims.firstIndex { $0.identity.id == surface.id.raw }.map { reclaims.remove(at: $0) }
         let reclaimed = claim?.identity.workspace
         if let bundle, claim == nil, pendingSession.contains(where: { $0.id == surface.id.raw }) { appsRunningSinceSave.insert(bundle) }
@@ -605,6 +624,12 @@ final class WindowManager: SurfaceRegistryDelegate {
             how = "inserted at the focused tile"
         }
         treeCause = "added \(surface.id) \((surface as? AXSurface)?.appName ?? "?") \(reclaimed != nil ? "(reclaimed) " : remembered != nil ? "(remembered) " : "")\(how)"
+        // One line per window, because the tree journal records a single cause for a
+        // whole relayout: when a dozen windows come back together after a wake, it
+        // names the last of them and says nothing about the other eleven.
+        log("place: \(surface.id) \((surface as? AXSurface)?.appName ?? "?") → ws\(destination) "
+          + "(\(reclaimed != nil ? "its own record" : remembered != nil ? "the saved session" : "no record — where you are"))"
+          + "\(returnTo != nil ? ", then back to ws\(returnTo!)" : "")")
         homeWorkspace[surface.id] = destination
         knownIdentity[surface.id] = WindowIdentity(id: surface.id.raw, bundleID: bundle,
                                                    title: surface.title, workspace: destination)
@@ -646,7 +671,7 @@ final class WindowManager: SurfaceRegistryDelegate {
             // stamps once per window, each tree smaller than the last.
             if let departing {
                 let kept = rememberedTrees[home]
-                if kept == nil || CACurrentMediaTime() - kept!.at > 600 || departing.surfaces.count >= kept!.root.surfaces.count {
+                if kept == nil || CACurrentMediaTime() - kept!.at > 43_200 || departing.surfaces.count >= kept!.root.surfaces.count {
                     rememberedTrees[home] = (departing, CACurrentMediaTime())
                 }
             }
@@ -801,7 +826,7 @@ final class WindowManager: SurfaceRegistryDelegate {
     /// layout, so each arrival rebuilds the workspace from it; windows that are
     /// present but were never in the saved tree are re-inserted the dwindle way.
     private func restoreLayout(for id: SurfaceID, into index: Int) -> Bool {
-        let remembered = rememberedTrees[index].flatMap { CACurrentMediaTime() - $0.at < 600 ? WorkspaceLayout(root: $0.root) : nil }
+        let remembered = rememberedTrees[index].flatMap { CACurrentMediaTime() - $0.at < 43_200 ? WorkspaceLayout(root: $0.root) : nil }
         guard let saved = pendingLayouts[index] ?? remembered, var workspace = workspaces[index] else { return false }
         if let rect = saved.floating[id.raw] {
             workspace.setFloating(id, rect)
@@ -818,7 +843,7 @@ final class WindowManager: SurfaceRegistryDelegate {
     /// record must never wipe the arrangement an earlier arrival rebuilt.
     private func bestTree(for id: SurfaceID, into index: Int, claimed: Tile?) -> Tile? {
         let present = Set((workspaces[index]?.tiled ?? []) + [id])
-        let slot = rememberedTrees[index].flatMap { CACurrentMediaTime() - $0.at < 600 ? $0.root : nil }
+        let slot = rememberedTrees[index].flatMap { CACurrentMediaTime() - $0.at < 43_200 ? $0.root : nil }
         return Tile.richest(of: [claimed, slot, pendingLayouts[index]?.root, workspaces[index]?.root],
                             containing: id, present: present)
     }
@@ -1689,6 +1714,240 @@ extension WindowManager {
                 app.activate()
             }
             return ["ok": true, "did": "activating \(app.localizedName ?? bundle)"]
+        case "chat":
+            // A message into a chat app's conversation: Discord (and Slack, the same
+            // way) has a quick switcher on ⌘K that jumps to any DM or channel by
+            // typed name, then the composer takes the words. Wisper tried
+            // AppleScript on Discord, which has no dictionary. Focus the window,
+            // wait for focus, ⌘K, type the name, Return, wait for the composer,
+            // type the message, Return; every wait is on a real signal.
+            guard let number = request["id"] as? NSNumber, let who = request["to"] as? String, !who.isEmpty,
+                  let text = request["text"] as? String, !text.isEmpty else { return ["error": "missing id, to or text"] }
+            let cid = SurfaceID(UInt64(truncating: number))
+            guard let target = registry.surface(for: cid) else { return ["error": "no such window"] }
+            let back = focused
+            let pid = target.pid
+            controlFocus(cid)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                var landed = false
+                for _ in 0..<25 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if self.focused == cid { landed = true; break }
+                }
+                guard landed else { log("chat: window \(cid.raw) never took focus; nothing sent"); self.chatOutcomes[cid.raw] = "no focus"; return }
+                // Tiling focus is not keyboard focus. Keystrokes go to the FRONTMOST
+                // app, and after Wisper was just spoken to that is Wisper, whatever
+                // window the tree calls focused — ⌘K and the name went nowhere,
+                // three times, while the same keys from a shell worked. Bring the
+                // app to the front and wait until macOS says it is.
+                if let app = NSRunningApplication(processIdentifier: pid) {
+                    app.activate()
+                    var front = false
+                    for _ in 0..<20 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { front = true; break }
+                    }
+                    guard front else { log("chat: \(target.appName) never came to the front; nothing sent"); self.chatOutcomes[cid.raw] = "no focus"; return }
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                Keys.pressViaSystemEvents(40, into: target.appName, command: true)   // ⌘K: the quick switcher
+                // Electron reports no focused text field; the switcher is known to
+                // be open by its own words appearing in the window.
+                var ready = false
+                for _ in 0..<20 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    let words = target.readableText(limit: 2000).lowercased()
+                    if words.contains("quick switcher") || words.contains("where would you like to go") || words.contains("search for") { ready = true; break }
+                }
+                guard ready else { log("chat: quick switcher never opened; nothing sent"); self.chatOutcomes[cid.raw] = "no switcher"; return }
+                // The name has to be in the switcher's field before the results
+                // mean anything: once it opened and the typed name never arrived —
+                // the switcher sat on "PREVIOUS CHANNELS" and the ask was refused
+                // as "nobody called Asscracker" (2 September). Typed again, once,
+                // after clearing the field, if the first attempt went nowhere.
+                var inField = false
+                for attempt in 0..<2 where !inField {
+                    if attempt > 0 {
+                        Keys.pressViaSystemEvents(0, into: target.appName, command: true)   // ⌘A
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                        Keys.pressViaSystemEvents(51, into: target.appName)                 // Delete
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                    }
+                    Keys.typeViaSystemEvents(who, into: target.appName)
+                    for _ in 0..<12 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        let lines = target.readableText(limit: 4000).split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+                        if lines.contains(where: { $0.lowercased() == who.lowercased() }) { inField = true; break }
+                    }
+                }
+                // The top result must be the person asked for, not whatever Discord
+                // ranks first: "asscracker" put a recent channel at the top, Return
+                // opened it, and the message went nowhere (2 September). Names in
+                // Discord are often stylised — ᵃˢˢᶜʳᵃᶜᵏᵉʳ¹²³ — so the match folds
+                // to plain letters. Two seconds for the results, then a decision.
+                var matched = false
+                let wantFolded = Self.foldName(who)
+                for _ in 0..<20 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    let words = target.readableText(limit: 4000)
+                    // With text in its field the switcher drops its heading; the
+                    // first line is the typed name itself and the top result is
+                    // the line after it. That line, folded, has to contain the name.
+                    let lines = words.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    if let typed = lines.firstIndex(where: { $0.lowercased() == who.lowercased() }), typed + 1 < lines.count {
+                        let top = lines[typed + 1]
+                        if !top.uppercased().hasPrefix("PROTIP"), Self.foldName(top).contains(wantFolded) { matched = true; break }
+                    }
+                }
+                guard matched else {
+                    let seen = target.readableText(limit: 600).split(separator: "\n").prefix(6).joined(separator: " | ")
+                    log("chat: no result for '\(who)' at the top of the switcher; nothing sent. switcher showed: \(seen)")
+                    // Escape closes the switcher — checked, and pressed again if it
+                    // is still up, so the next ask does not open ⌘K onto a switcher
+                    // that is already open and close it instead.
+                    for _ in 0..<3 {
+                        Keys.pressViaSystemEvents(53, into: target.appName)   // Escape: close the switcher, leave everything as it was
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        if !target.readableText(limit: 2000).lowercased().contains("quick switcher") { break }
+                    }
+                    self.chatOutcomes[cid.raw] = "no match"
+                    if let back, back != cid { self.controlFocus(back) }
+                    return
+                }
+                Keys.pressViaSystemEvents(36, into: target.appName)                          // Return: open it
+                // The conversation has opened when the window's own title names it
+                // — "@ᵃˢˢᶜʳᵃᶜᵏᵉʳ¹²³ - Discord", "#chat | … - Discord" — folded, so the
+                // stylised name still matches. (The composer's placeholder is there
+                // too, but far down a long window's text.)
+                // The composer itself shows as an empty mark; its toolbar ("Add
+                // Emoji") is the sign it has been built — the title flips first,
+                // while the view is still loading, and words typed then go nowhere.
+                var composer = false
+                for _ in 0..<30 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if Self.foldName(target.title).contains(wantFolded),
+                       target.readableText(limit: 40_000).contains("Add Emoji") { composer = true; break }
+                }
+                guard composer else {
+                    log("chat: the conversation never showed a composer; nothing sent")
+                    self.chatOutcomes[cid.raw] = "no composer"
+                    if let back, back != cid { self.controlFocus(back) }
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                // Whatever an earlier attempt left in the composer goes first: a run
+                // that opened the DM and bailed left its words there, and the next
+                // run typed the same words after them — one message, doubled.
+                // Select-all then Delete in a text field is exactly that and no more.
+                // The words must be in the composer before Return sends them; the
+                // composer sits at the end of a long window, so the read is generous.
+                // Focus can arrive a beat after the toolbar, so a second try — clear
+                // first, so nothing doubles — before giving up.
+                var held = false
+                for attempt in 0..<2 where !held {
+                    if attempt > 0 { try? await Task.sleep(nanoseconds: 500_000_000) }
+                    Keys.pressViaSystemEvents(0, into: target.appName, command: true)   // ⌘A
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    Keys.pressViaSystemEvents(51, into: target.appName)                 // Delete
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    Keys.typeViaSystemEvents(text, into: target.appName)
+                    for _ in 0..<15 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        if target.readableText(limit: 40_000).contains(String(text.prefix(24))) { held = true; break }
+                    }
+                }
+                guard held else {
+                    log("chat: the composer never took the words; nothing sent")
+                    // Leave nothing half-typed behind.
+                    Keys.pressViaSystemEvents(0, into: target.appName, command: true)
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    Keys.pressViaSystemEvents(51, into: target.appName)
+                    self.chatOutcomes[cid.raw] = "not typed"
+                    if let back, back != cid { self.controlFocus(back) }
+                    return
+                }
+                Keys.pressViaSystemEvents(36, into: target.appName)
+                log("chat: \(text.count) chars to \(who) in \(target.appName)")
+                self.chatOutcomes[cid.raw] = "sent"
+                if let back, back != cid { self.controlFocus(back) }
+            }
+            chatOutcomes[cid.raw] = "pending"
+            return ["ok": true, "did": "messaging \(who) in \(target.appName)"]
+
+        case "chat-status":
+            // Wisper asks this after `chat`, so "sent" is said only once it is true.
+            guard let number = request["id"] as? NSNumber else { return ["error": "missing id"] }
+            return ["state": chatOutcomes[UInt64(truncating: number)] ?? "none"]
+
+        case "rename":
+            // Name a workspace — the same thing ⌥R does, without the prompt. Asked to
+            // name one, Wisper had no way to and said "workspace 2 is now named
+            // Working" anyway (2 September). An empty name clears it.
+            guard let number = request["workspace"] as? NSNumber else { return ["error": "missing workspace"] }
+            let index = Int(truncating: number)
+            guard (1...9).contains(index) else { return ["error": "workspace must be 1–9"] }
+            let name = (request["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                config.workspaceNames[index] = nil
+                renamedWorkspaces[index] = nil
+            } else {
+                config.workspaceNames[index] = name
+                renamedWorkspaces[index] = name
+            }
+            WorkspaceNameStore.save(renamedWorkspaces)
+            scheduleRelayout()
+            return ["ok": true, "did": name.isEmpty ? "cleared the name of workspace \(index)" : "named workspace \(index) \"\(name)\""]
+
+        case "title":
+            // Name a terminal window and keep it named. Ghostty's own `title`
+            // setting forces a title and ignores what the program asks for, but it
+            // is global; View ▸ Change Terminal Title does the same for one surface,
+            // and a title set that way survives everything Claude Code writes
+            // afterwards (watched for a minute while it worked, 2 September).
+            // So an agent window can be called "daily planner" instead of whatever
+            // the agent decided its current task should be called.
+            guard let number = request["id"] as? NSNumber, let text = request["text"] as? String, !text.isEmpty else {
+                return ["error": "missing id or text"]
+            }
+            let tid = SurfaceID(UInt64(truncating: number))
+            guard let target = registry.surface(for: tid) else { return ["error": "no such window"] }
+            let back = focused
+            let pid = target.pid
+            controlFocus(tid)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                var landed = false
+                for _ in 0..<25 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if self.focused == tid { landed = true; break }
+                }
+                guard landed else { log("title: window \(tid.raw) never took focus"); return }
+                guard AppMenus.press(menu: "View", startingWith: "Change Terminal Title", in: pid) else {
+                    log("title: Ghostty has no Change Terminal Title item")
+                    return
+                }
+                // Nothing is typed until the prompt is actually there. The first
+                // version typed after a fixed delay, the sheet had not opened, and
+                // the name went into the shell instead — "zsh: command not found:
+                // workout". Keystrokes meant for a dialog must never reach a prompt.
+                var prompt = false
+                for _ in 0..<25 {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if AppMenus.textFieldFocused(in: pid) { prompt = true; break }
+                }
+                guard prompt else {
+                    log("title: the rename prompt never appeared; nothing typed")
+                    if let back, back != tid { self.controlFocus(back) }
+                    return
+                }
+                Keys.type(text, into: pid)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                Keys.press(36, into: pid)   // Return, apart from the text burst
+                if let back, back != tid { self.controlFocus(back) }
+            }
+            return ["ok": true, "did": "naming that window \(text)"]
+
         case "close":
             // Close one window by id — the way `type` targets by id, where the
             // `closewindow` dispatcher only ever reaches the focused one. Grew for

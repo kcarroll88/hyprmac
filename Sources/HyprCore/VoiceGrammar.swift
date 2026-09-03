@@ -89,21 +89,23 @@ public enum VoiceGrammar {
         if let rest = strip(text, prefixes: ["swap ", "exchange "]), let d = direction(rest) {
             return .swapWindow(d)
         }
-        if let rest = strip(text, prefixes: ["send to workspace ", "move to workspace ",
-                                            "send this to workspace "]),
-           let n = number(rest) {
-            return .moveToWorkspace(n)
+        // Moving a window to a workspace: a verb of sending plus a window word or
+        // "this", and the number anywhere after. "Send this window to workspace 3"
+        // was outside the old three prefixes.
+        if text.range(of: "^(send|move|put|throw|push|shove) (this|the|that|it|my)? ?(window|app|safari|terminal|one)?( over)? to (workspace |space |desktop )?", options: .regularExpression) != nil
+            || text.hasPrefix("send to workspace ") || text.hasPrefix("move to workspace ") {
+            let tail = text.components(separatedBy: " to ").last ?? ""
+            let bare = tail.replacingOccurrences(of: "^(workspace|space|desktop) ", with: "", options: .regularExpression)
+            if let n = number(bare) { return .moveToWorkspace(n) }
         }
-        // Spoken forms first; then the ways people type it into Wisper's box, which
-        // now comes through here too. "switch me to workspace 3" typed once cost a
-        // whole model turn because this list did not have it.
-        if let rest = strip(text, prefixes: ["workspace ", "go to workspace ", "switch to workspace ",
-                                            "switch me to workspace ", "switch workspace ", "take me to workspace ",
-                                            "put me on workspace ", "jump to workspace ", "change to workspace ",
-                                            "move me to workspace "]),
-           let n = number(rest) {
-            return .workspace(n)
-        }
+        // Going to a workspace: the number is the anchor, the words around it are
+        // noise. This was a list of prefixes — "go to workspace", "switch me to
+        // workspace", nine more — and a QA sweep found "take me to 3", "switch
+        // over to the third workspace" and "jump to three" all outside it (two of
+        // six phrasings hit). Now: a workspace number or ordinal anywhere, a verb
+        // of going or the word "workspace" somewhere, and nothing about moving a
+        // window (that is `.moveToWorkspace`, matched above).
+        if let n = workspaceNamed(in: text) { return .workspace(n) }
 
         switch true {
         case matches(text, ["zoom", "fullscreen", "full screen", "maximize", "blow up", "expand"]):
@@ -180,6 +182,31 @@ public enum VoiceGrammar {
 
     /// Recognisers render digits as words about half the time, and homophones the
     /// rest ("workspace to"), so accept all three.
+    /// The workspace a going-sentence names, or nil when the sentence is not one.
+    static func workspaceNamed(in text: String) -> Int? {
+        let t = " " + text + " "   // already normalised: lowercase, punctuation gone, single spaces
+        // A window being moved is a different command, matched earlier; a question
+        // ("what workspace am i on") is not a command at all.
+        if t.range(of: " (send|move|put|throw) (this|the|that|it|my)? ?(window|app|safari|terminal)", options: .regularExpression) != nil { return nil }
+        if t.range(of: " (what|which|where|am i|are we) ", options: .regularExpression) != nil { return nil }
+        let going = t.range(of: " (go|goto|switch|take|jump|move|put|hop|flip|bring|send|change|head|get|throw) ", options: .regularExpression) != nil
+        let says = t.contains(" workspace ") || t.contains(" space ") || t.contains(" desktop ")
+        guard going || says else { return nil }
+        // The number: a digit, a number word, an ordinal — and the transcriber's
+        // "to" for two, but only right after "workspace", where "switch to
+        // workspace nine" would otherwise read as 2.
+        let ordinals = ["first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9,
+                        "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5, "6th": 6, "7th": 7, "8th": 8, "9th": 9]
+        let words = t.split(separator: " ").map(String.init)
+        for (i, word) in words.enumerated() {
+            if let n = Int(word), (1...9).contains(n) { return n }
+            if word != "to", let n = numberWords[word] { return n }
+            if let n = ordinals[word] { return n }
+            if word == "to", i > 0, words[i - 1] == "workspace", i == words.count - 1 { return 2 }
+        }
+        return nil
+    }
+
     private static func number(_ text: String) -> Int? {
         if let value = Int(text) { return value }
         return numberWords[text]

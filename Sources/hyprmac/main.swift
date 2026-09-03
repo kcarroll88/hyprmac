@@ -113,6 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Said out loud, so a disappearance can be told from a quit. Twice in one
+        // evening the log simply stopped mid-work — no signal caught, no quit
+        // logged — which means SIGKILL or a crash with no report, and this line
+        // is how the next one is narrowed down.
+        log("quitting: applicationWillTerminate")
         manager?.unparkAll()
     }
 
@@ -127,6 +132,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dump.resume()
         signalSources.append(dump)
 
+        // The crash signals too — one line each, then the default disposition, so
+        // a crash still produces a report but also a last word in the log.
+        for number in [SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGTRAP] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler {
+                log("FATAL signal \(number) — crashing")
+                signal(number, SIG_DFL); raise(number)
+            }
+            source.resume()
+            signalSources.append(source)
+        }
         for number in [SIGINT, SIGTERM, SIGHUP] {
             // The default disposition must go, or the process dies before the
             // dispatch source ever runs.
